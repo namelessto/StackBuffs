@@ -1,8 +1,6 @@
 using HarmonyLib;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
-using StardewValley;
-using StardewValley.Constants;
 using StackBuffs.Patches;
 
 namespace StackBuffs;
@@ -20,34 +18,7 @@ internal sealed class ModEntry : Mod
 
         new Harmony(ModManifest.UniqueID).PatchAll();
 
-        helper.ConsoleCommands.Add(
-            "stackbuffs_maxskills",
-            "Sets all skills to level 10 and all masteries to level 5 for testing.",
-            (_, _) => MaxSkills()
-        );
-
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
-    }
-
-    private void MaxSkills()
-    {
-        if (!Context.IsWorldReady)
-        {
-            Monitor.Log("Load a save first.", LogLevel.Warn);
-            return;
-        }
-
-        var p = Game1.player;
-        p.farmingLevel.Value  = 10;
-        p.fishingLevel.Value  = 10;
-        p.foragingLevel.Value = 10;
-        p.miningLevel.Value   = 10;
-        p.combatLevel.Value   = 10;
-
-        for (int skill = 0; skill < 5; skill++)
-            p.stats.Set(StatKeys.Mastery(skill), 5u);
-
-        Monitor.Log("All skills set to 10, all masteries set to 5.", LogLevel.Info);
     }
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
