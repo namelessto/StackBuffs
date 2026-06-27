@@ -1,0 +1,16 @@
+{
+  "Name": "Stack Buffs",
+  "Author": "NamelessTo",
+  "Version": "1.0.0",
+  "Description": "Allows food and drink buffs to stack instead of replacing each other.",
+  "UniqueID": "NamelessTo.StackBuffs",
+  "EntryDll": "StackBuffs.dll",
+  "MinimumApiVersion": "4.2.1",
+  "UpdateKeys": [],
+  "Dependencies": [
+    {
+      "UniqueID": "spacechase0.GenericModConfigMenu",
+      "IsRequired": false
+    }
+  ]
+}
