@@ -2,10 +2,14 @@
   "config.section.buff-stacking": "Buff Stacking",
 
   "config.stacking-mode.name": "Stacking Mode",
-  "config.stacking-mode.tooltip": "Independent: each application has its own timer. Additive: eating the same food extends its duration. Refresh And Stack: resets timer and adds a new effect layer.",
+  "config.stacking-mode.tooltip": "Independent: each application has its own timer, stacking effects only from different sources. Additive: stacks effects and adds timers. Refresh And Stack: stacks effects and resets the timer. Timer Only: extends the timer without stacking effects.",
   "config.mode.Independent": "Independent",
   "config.mode.Additive": "Additive",
   "config.mode.RefreshAndStack": "Refresh And Stack",
+  "config.mode.TimerOnly": "Timer Only",
+
+  "config.whole-day.name": "Buffs Last All Day",
+  "config.whole-day.tooltip": "When enabled, all food and drink buffs last until you sleep, regardless of their normal duration.",
 
   "config.statue-stacking.name": "Blessings Per Day",
   "config.statue-stacking.tooltip": "One per statue: place multiple Dwarf King or Blessings statues to receive one blessing from each, per day.",
@@ -51,5 +55,24 @@
   "config.priority.bomb-immunity.blessing": "bombs cannot damage you",
 
   "config.priority.geodes.name": "Geode Find Chance",
-  "config.priority.geodes.blessing": "greater chance to find geodes"
+  "config.priority.geodes.blessing": "greater chance to find geodes",
+
+  "config.section.effect-stacking": "Per-Effect: Stacking",
+  "config.section.effect-stacking.tooltip": "Uncheck an effect type to use vanilla replacement behavior for any buff that grants it, regardless of the global stacking mode.",
+
+  "config.section.effect-wholeday": "Per-Effect: Whole Day",
+  "config.section.effect-wholeday.tooltip": "Check an effect type to make any buff that grants it last until you sleep.",
+
+  "config.effect.farming":   "Farming",
+  "config.effect.fishing":   "Fishing",
+  "config.effect.mining":    "Mining",
+  "config.effect.luck":      "Luck",
+  "config.effect.foraging":  "Foraging",
+  "config.effect.stamina":   "Max Energy",
+  "config.effect.magnetism": "Magnetic Radius",
+  "config.effect.speed":     "Speed",
+  "config.effect.defense":   "Defense",
+  "config.effect.attack":    "Attack",
+  "config.effect.combat":    "Combat",
+  "config.effect.immunity":  "Immunity"
 }

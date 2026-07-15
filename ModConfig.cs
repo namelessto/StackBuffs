@@ -1,10 +1,13 @@
 namespace StackBuffs;
 
-public enum StackingMode { Additive, Independent, RefreshAndStack }
+public enum StackingMode { Additive, Independent, RefreshAndStack, TimerOnly }
 
 public class ModConfig
 {
     public StackingMode Mode { get; set; } = StackingMode.Additive;
+    public bool WholeDay { get; set; } = false;
+    public HashSet<string> DisabledEffects { get; set; } = new();
+    public HashSet<string> WholeDayEffects { get; set; } = new();
     public bool EnableStatueStacking { get; set; } = true;
 
     public bool DwarfAutoPick { get; set; } = false;
