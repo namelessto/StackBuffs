@@ -2,11 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+Shared house conventions for all my mods are imported below. This file only covers what is specific to StackBuffs.
 
-StackBuffs is a Stardew Valley SMAPI mod written in C# (.NET 6.0). Its intent is to allow buffs to stack rather than be replaced. The project is at early scaffold stage — only the SMAPI template `ModEntry.cs` exists; no mod logic has been implemented yet.
-
-A `manifest.json` file is **required** but does not yet exist. It must be created at the project root before the mod will load in-game.
+@../CONVENTIONS.md
 
 ## Build
 
@@ -14,76 +12,29 @@ A `manifest.json` file is **required** but does not yet exist. It must be create
 dotnet build
 ```
 
-The `Pathoschild.Stardew.ModBuildConfig` NuGet package (v4.4.0) auto-detects the local Stardew Valley installation and copies the built DLL plus `manifest.json` into `<Stardew Valley>/Mods/StackBuffs/` on each build.
-
-To build in Release mode (for distribution):
-```
-dotnet build --configuration Release
-```
-
-## Running / Testing
-
-There is no automated test suite. Testing is done by launching Stardew Valley via SMAPI after building:
-
-1. Build the project (`dotnet build`).
-2. Launch Stardew Valley through SMAPI (the game executable wrapped by SMAPI, not the vanilla exe).
-3. SMAPI loads all mods from its `Mods/` folder; check the SMAPI console for load errors or `Monitor.Log` output.
-
-SMAPI's console window shows all `this.Monitor.Log(...)` calls at runtime, which is the primary debugging mechanism.
+`Pathoschild.Stardew.ModBuildConfig` deploys the DLL + `manifest.json` to the SMAPI `Mods` folder on each build. No test project; verify by launching the game through SMAPI.
 
 ## Architecture
 
-### SMAPI Mod Pattern
+SMAPI mod (manifest UniqueID `NamelessTo.StackBuffs`) that makes buffs stack instead of replacing each other, and optionally lets the Statue of the Dwarf King / Statue of Blessings be used once per statue per day with their buffs stacking. All behavior is Harmony patches (`new Harmony(...).PatchAll()` in `ModEntry`), applied via attributes in `Patches/`.
 
-Every SMAPI mod has a single entry class inheriting from `Mod`:
+Config is pushed into the patch classes as static fields (`BuffManagerPatch.Config`, `StatuePatch.Config`). Anything that replaces `Config` must go through `ModEntry.PushConfigToPatches` (as the GMCM reset does via `ResetConfig`), or the patches keep reading the old instance. The GMCM page lives in `ConfigMenu`, which reads config through a getter for the same reason.
 
-```csharp
-internal sealed class ModEntry : Mod
-{
-    public override void Entry(IModHelper helper) { ... }
-}
-```
+### `Patches/BuffManagerPatch.cs`: food/drink stacking
 
-- `Entry` is called once on load. Wire up all event handlers here via `helper.Events.*`.
-- `this.Monitor` — logging; use `LogLevel.Debug/Info/Warn/Error`.
-- `this.Helper` — access to game APIs, content, config, reflection, multiplayer, etc.
-- `this.ModManifest` — the mod's manifest metadata at runtime.
+A prefix on `BuffManager.Apply`, switching on `ModConfig.Mode` (`StackingMode`). Debuffs and non-locally-controlled managers (remote farmers in multiplayer) always fall through to vanilla.
 
-### Key SMAPI Event Namespaces
+- `Additive`, `RefreshAndStack`, `TimerOnly`: merge into the existing buff with the same id; the modes differ in whether effects add and whether timers add or refresh.
+- `Independent`: stores each buff under a composed key `id + '\u001F' + source` so same-id buffs from different sources get their own icon and timer. Because that breaks id-based lookups, **`IsAppliedPatch` and `RemovePatch` exist to make `hasBuff`, `PLAYER_HAS_BUFF` and `Remove(id)` still match composed keys.** Use `BuffManagerPatch.FindApplied` rather than `AppliedBuffs[id]` anywhere a buff is looked up by plain id. `IsAppliedPatch` runs on every `hasBuff` call, some of them per tick, so keep it allocation-free.
+- `statue_of_blessings_*` buffs always stay under their plain id, whatever the mode.
+- `NormalizeKeys` re-keys applied buffs when the mode changes mid-game.
+- `DisabledEffects` = per-effect opt-out: those fields use vanilla replacement instead of adding. `WholeDay` / `WholeDayEffects` make buffs `ENDLESS`; `RemoveWholeDayBuffs` (called from `ModEntry.OnDayEnding`) removes those at day end unless the buff's data says it is endless anyway.
+- Since the prefix returns `false`, it must replicate vanilla side effects itself (`actionsOnApply` via `FireActionsOnApply`, `Dirty`, `OnAdded`, `buffsDisplay.updatedIDs`).
 
-| Namespace | Purpose |
-|---|---|
-| `helper.Events.GameLoop` | Save load/unload, update ticks, day start/end |
-| `helper.Events.Player` | Inventory changes, warping |
-| `helper.Events.World` | NPC/object/location changes |
-| `helper.Events.Input` | Keyboard, mouse, controller input |
-| `helper.Events.Display` | Rendering hooks |
-| `helper.Events.Multiplayer` | Multiplayer sync |
+### `Patches/StatuePatch.cs`: statue stacking (`EnableStatueStacking`)
 
-### Buff System (Stardew Valley internals)
-
-Buffs live on `Game1.player.buffs` (a `BuffManager`). Each `Buff` has an `id` string, effects (`BuffEffects`), duration, and source. The vanilla system replaces an existing buff with the same `id` rather than stacking it — that replacement behavior is what this mod targets.
-
-To intercept buff application, hook into `GameLoop.UpdateTicked` or use Harmony to patch `BuffManager` methods.
-
-### manifest.json (must be created)
-
-```json
-{
-  "Name": "StackBuffs",
-  "Author": "<your name>",
-  "Version": "1.0.0",
-  "Description": "Allows food and drink buffs to stack instead of replacing each other.",
-  "UniqueID": "<Author>.StackBuffs",
-  "EntryDll": "StackBuffs.dll",
-  "MinimumApiVersion": "4.0.0",
-  "UpdateKeys": []
-}
-```
-
-`UniqueID` must be globally unique on NexusMods (convention: `Author.ModName`).
-
-## Dependencies
-
-- **Pathoschild.Stardew.ModBuildConfig** — NuGet package that handles SMAPI references and deploy-on-build. No manual reference to SMAPI DLLs is needed in the csproj.
-- **Harmony** — if patching game internals (not yet added); add via NuGet `0Harmony` and initialize in `Entry`.
+- Per-player state lives in `Farmer.modData` with `StackBuffs.`-prefixed keys: which statue was used today (keyed by tile), today's offered Dwarf King pair, and a per-buff stack count reset by day.
+- Prefixes replace statue interaction (`SObject.checkForAction` for the Dwarf King, `CheckForActionOnBlessedStatue`) and the Dwarf King choice (`ChooseFromIconsMenu.doIconAction`).
+- Vanilla reads these buffs as `hasBuff(id) ? value : default`, so stacking is done with **transpilers** that swap the constant for a call scaled by stack count. `ReplaceFirstBuffValue` finds `ldstr id` + `hasBuff` and replaces the instruction at a fixed offset (+3 for a ternary, +4 for an if-block).
+- **These transpilers depend on the exact IL layout.** After a game update, re-check each patched method against the decompiled source (`D:\projects\stardew-mods\Stardew Source\Stardew Code`). Every transpiler logs a warning when its pattern isn't found. The bonus values they scale are named constants at the top of `StatuePatch`, copied from vanilla; re-check those too.
+- Prismatic butterfly blessing: `PrismaticButterflyPatch` spawns one butterfly per stack; `ButterflyCapturePatch` makes a catch consume one stack instead of removing the buff.

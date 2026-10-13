@@ -16,6 +16,11 @@ public class ModConfig
     public bool DwarfGemNodeScaling    { get; set; } = true;
     public bool DwarfMusselNodeScaling { get; set; } = true;
 
+    /// <summary>Highest priority rank a Dwarf King blessing can have (picked first).</summary>
+    public const int MinPriorityRank = 1;
+    /// <summary>Lowest priority rank a Dwarf King blessing can have (picked last).</summary>
+    public const int MaxPriorityRank = 5;
+
     // Priority rank for each Dwarf King blessing (1 = picked first, 5 = last).
     // When auto-pick is on, the lower-ranked offering is selected automatically.
     public int DwarfPriority_ExtraOre      { get; set; } = 1; // idx 0: +1 ore

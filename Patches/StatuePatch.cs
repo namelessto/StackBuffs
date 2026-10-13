@@ -7,7 +7,9 @@ using StardewValley.Buffs;
 using StardewValley.Constants;
 using StardewValley.Locations;
 using StardewValley.Menus;
+using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using SObject = StardewValley.Object;
 
 namespace StackBuffs.Patches;
@@ -16,6 +18,32 @@ internal static class StatuePatch
 {
     internal static ModConfig Config = null!;
     internal static IMonitor? Monitor;
+    internal static ITranslationHelper? Translation;
+
+    // Vanilla per-buff bonus values, scaled by stack count in the transpilers below. Copied from the
+    // decompiled methods named on each one; re-check them after a game update.
+    /// <summary>dwarfStatue_1: extra ladder chance on monster kill (<c>MineShaft.monsterDrop</c>).</summary>
+    private const double DwarfLadderChanceFromMonsters = 0.07;
+    /// <summary>dwarfStatue_1: ladder chance multiplier when breaking stones (<c>MineShaft.checkStoneForItems</c>).</summary>
+    private const double DwarfLadderChanceMultiplier = 1.25;
+    /// <summary>dwarfStatue_2: extra coal chance from stones outside the mines (<c>GameLocation.OnStoneDestroyed</c>).</summary>
+    private const double DwarfCoalChanceOnStoneDestroyed = 0.03;
+    /// <summary>dwarfStatue_2: extra coal chance from <c>GameLocation.breakStone</c>.</summary>
+    private const double DwarfCoalChanceOnBreakStone = 0.025;
+    /// <summary>dwarfStatue_2: extra coal chance from stones in the mines (<c>MineShaft.checkStoneForItems</c>).</summary>
+    private const double DwarfCoalChanceInMines = 0.1;
+    /// <summary>dwarfStatue_4: geode chance multiplier (<c>GameLocation.OnStoneDestroyed</c>, <c>MineShaft.checkStoneForItems</c>).</summary>
+    private const double DwarfGeodeChanceMultiplier = 1.25;
+    /// <summary>statue_of_blessings_5: crit chance bonus (<c>GameLocation.damageMonster</c>).</summary>
+    private const float BlessingCritChanceBonus = 0.1f;
+    /// <summary>statue_of_blessings_4: friendship per conversation (<c>NPC.grantConversationFriendship</c>).</summary>
+    private const int BlessingConversationFriendship = 60;
+
+    /// <summary>The private field holding which icon menu this is; null if a game update renamed it.</summary>
+    private static readonly FieldInfo? ChooseFromIconsMenuWhichField = AccessTools.Field(typeof(ChooseFromIconsMenu), "which");
+
+    /// <summary>The stack-count suffix appended to each statue buff's description, so the next update can strip exactly what was added.</summary>
+    private static readonly ConditionalWeakTable<Buff, string> AppliedStackSuffixes = new();
 
     private static string PerPlayerKey(SObject statue)
         => $"StackBuffs.usedDay.{(int)statue.TileLocation.X}_{(int)statue.TileLocation.Y}";
@@ -84,24 +112,36 @@ internal static class StatuePatch
         UpdateStatueBuffDescription(who, buffId);
     }
 
-    // Appends "(×N stacks)" to the description of an already-applied statue buff.
+    // Sets the "(×N stacks)" suffix on the description of an already-applied statue buff, replacing
+    // any suffix added before, and dropping it once only one stack is left.
     // Called after applyBuff so hasBuff returns true and DwarfBuffCount is valid.
     private static void UpdateStatueBuffDescription(Farmer who, string buffId)
     {
-        if (!who.buffs.AppliedBuffs.TryGetValue(buffId, out var buff)) return;
+        // Looked up via FindApplied since Independent mode may store it under a composed id+source key.
+        if (BuffManagerPatch.FindApplied(who.buffs, buffId) is not { } buff) return;
         int count = DwarfBuffCount(who, buffId);
-        if (count <= 1) return;
 
         string desc = buff.description ?? "";
-        int suffixStart = desc.LastIndexOf("\n(×", StringComparison.Ordinal);
-        if (suffixStart >= 0)
-            desc = desc[..suffixStart];
-        else if (desc.StartsWith("(×", StringComparison.Ordinal))
-            desc = "";
+        if (AppliedStackSuffixes.TryGetValue(buff, out string? oldSuffix) && desc.EndsWith(oldSuffix, StringComparison.Ordinal))
+            desc = desc[..^oldSuffix.Length];
+        AppliedStackSuffixes.Remove(buff);
 
-        buff.description = string.IsNullOrEmpty(desc)
-            ? $"(×{count} stacks)"
-            : $"{desc}\n(×{count} stacks)";
+        if (count > 1)
+        {
+            string stacksText = Translation?.Get("buff.statue-stacks", new { count }) ?? $"(×{count})";
+            string suffix = string.IsNullOrEmpty(desc) ? stacksText : "\n" + stacksText;
+            desc += suffix;
+            AppliedStackSuffixes.Add(buff, suffix);
+        }
+        buff.description = desc;
+    }
+
+    // Logs a warning when a transpiler's IL pattern isn't found, so a game update that changes the
+    // patched method shows up in the SMAPI log instead of stacking silently turning off.
+    private static void WarnIfNotFound(bool found, string buffId, string method)
+    {
+        if (!found)
+            Monitor?.Log($"[StackBuffs] {buffId} pattern not found in {method}; its stacking is inactive", LogLevel.Warn);
     }
 
     // ── Transpiler utilities ─────────────────────────────────────────────────
@@ -305,8 +345,12 @@ internal static class StatuePatch
         static bool Prefix(ChooseFromIconsMenu __instance, string iconName)
         {
             if (!Config.EnableStatueStacking) return true;
-            string which = (string)AccessTools.Field(typeof(ChooseFromIconsMenu), "which").GetValue(__instance)!;
-            if (which != "dwarfStatue") return true;
+            if (ChooseFromIconsMenuWhichField is null)
+            {
+                Monitor?.LogOnce("[StackBuffs] ChooseFromIconsMenu.which field not found; Dwarf King stacking from the choice menu is inactive", LogLevel.Warn);
+                return true;
+            }
+            if (ChooseFromIconsMenuWhichField.GetValue(__instance) as string != "dwarfStatue") return true;
 
             var who = Game1.player;
             var statue = __instance.sourceObject;
@@ -509,9 +553,11 @@ internal static class StatuePatch
         {
             var codes = new List<CodeInstruction>(instructions);
             // L14833: dwarfStatue_4 ? 1.25 : 1.0  (ternary, offset +3)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_4", 3, w => MultiplicativeDouble(w, "dwarfStatue_4", 1.25));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_4", 3, w => MultiplicativeDouble(w, "dwarfStatue_4", DwarfGeodeChanceMultiplier)),
+                "dwarfStatue_4", "GameLocation.OnStoneDestroyed");
             // L14839: dwarfStatue_2 ? 0.03 : 0.0  (ternary, offset +3)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_2", 3, w => AdditiveDouble(w, "dwarfStatue_2", 0.03));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_2", 3, w => AdditiveDouble(w, "dwarfStatue_2", DwarfCoalChanceOnStoneDestroyed)),
+                "dwarfStatue_2", "GameLocation.OnStoneDestroyed");
             return codes;
         }
     }
@@ -524,9 +570,11 @@ internal static class StatuePatch
         {
             var codes = new List<CodeInstruction>(instructions);
             // L14861: if (who != null && hasBuff("dwarfStatue_0")) { num2++; }  (if-block, ldc.i4.1 at offset +4)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_0", 4, w => CountInt(w, "dwarfStatue_0"));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_0", 4, w => CountInt(w, "dwarfStatue_0")),
+                "dwarfStatue_0", "GameLocation.breakStone");
             // L15072: if (who.hasBuff("dwarfStatue_2")) { num8 += 0.025; }  (if-block, ldc.r8 at offset +4)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_2", 4, w => AdditiveDouble(w, "dwarfStatue_2", 0.025));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_2", 4, w => AdditiveDouble(w, "dwarfStatue_2", DwarfCoalChanceOnBreakStone)),
+                "dwarfStatue_2", "GameLocation.breakStone");
             return codes;
         }
 
@@ -583,7 +631,8 @@ internal static class StatuePatch
         {
             var codes = new List<CodeInstruction>(instructions);
             // L2071: dwarfStatue_1 ? 0.07 : 0.0  (ternary, offset +3)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_1", 3, w => AdditiveDouble(w, "dwarfStatue_1", 0.07));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_1", 3, w => AdditiveDouble(w, "dwarfStatue_1", DwarfLadderChanceFromMonsters)),
+                "dwarfStatue_1", "MineShaft.monsterDrop");
             return codes;
         }
     }
@@ -596,11 +645,14 @@ internal static class StatuePatch
         {
             var codes = new List<CodeInstruction>(instructions);
             // L3630: if (who != null && hasBuff("dwarfStatue_1")) { num6 *= 1.25; }  (if-block, ldc.r8 at offset +4)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_1", 4, w => MultiplicativeDouble(w, "dwarfStatue_1", 1.25));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_1", 4, w => MultiplicativeDouble(w, "dwarfStatue_1", DwarfLadderChanceMultiplier)),
+                "dwarfStatue_1", "MineShaft.checkStoneForItems");
             // L3671: dwarfStatue_4 ? 1.25 : 1.0  (ternary, offset +3)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_4", 3, w => MultiplicativeDouble(w, "dwarfStatue_4", 1.25));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_4", 3, w => MultiplicativeDouble(w, "dwarfStatue_4", DwarfGeodeChanceMultiplier)),
+                "dwarfStatue_4", "MineShaft.checkStoneForItems");
             // L3698: dwarfStatue_2 ? 0.1 : 0.0  (ternary, offset +3)
-            ReplaceFirstBuffValue(codes, "dwarfStatue_2", 3, w => AdditiveDouble(w, "dwarfStatue_2", 0.1));
+            WarnIfNotFound(ReplaceFirstBuffValue(codes, "dwarfStatue_2", 3, w => AdditiveDouble(w, "dwarfStatue_2", DwarfCoalChanceInMines)),
+                "dwarfStatue_2", "MineShaft.checkStoneForItems");
             return codes;
         }
     }
@@ -623,7 +675,7 @@ internal static class StatuePatch
             // L4683: if (who.hasBuff("statue_of_blessings_5")) { critChance += 0.1f; }
             // critChance is a float arg; ldc.r4 0.1f is at offset +4 after ldstr
             if (!ReplaceFirstBuffValue(codes, "statue_of_blessings_5", 4,
-                w => AdditiveFloat(w, "statue_of_blessings_5", 0.1f)))
+                w => AdditiveFloat(w, "statue_of_blessings_5", BlessingCritChanceBonus)))
                 Monitor?.Log("[StackBuffs] statue_of_blessings_5 crit pattern not found in GameLocation.damageMonster — crit stacking inactive", StardewModdingAPI.LogLevel.Warn);
             return codes;
         }
@@ -639,7 +691,7 @@ internal static class StatuePatch
             // L2832: if (who.hasBuff("statue_of_blessings_4")) { amount = 60; }
             // ldc.i4.s 60 is at offset +3; replace with 60 * count
             if (!ReplaceFirstBuffValue(codes, "statue_of_blessings_4", 3,
-                w => IntMultiply(w, "statue_of_blessings_4", 60)))
+                w => IntMultiply(w, "statue_of_blessings_4", BlessingConversationFriendship)))
                 Monitor?.Log("[StackBuffs] statue_of_blessings_4 friendship pattern not found in NPC.grantConversationFriendship — friendship stacking inactive", StardewModdingAPI.LogLevel.Warn);
             return codes;
         }
