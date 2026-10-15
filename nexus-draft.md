@@ -86,6 +86,7 @@ Safe to add to an existing save. It only changes how buffs are applied and how s
 [*][b]SMAPI[/b] by [url=https://www.nexusmods.com/profile/Pathoschild]Pathoschild[/url]
 [*][b]Generic Mod Config Menu[/b] by [url=https://www.nexusmods.com/profile/spacechase0]spacechase0[/url]
 [*][b]ConcernedApe[/b] for Stardew Valley
+[*]Chinese translation by [url=https://www.nexusmods.com/profile/CNSCZJ/mods]CNSCZJ[/url]
 [/list]
 
 [size=4][b]See Also[/b][/size]
