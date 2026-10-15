@@ -8,6 +8,8 @@
   "config.mode.TimerOnly": "仅计时",
   "config.whole-day.name": "增益持续一整天",
   "config.whole-day.tooltip": "启用后,所有食物和饮品的增益效果将持续到入睡为止,无视其正常持续时间.",
+  "config.mod-buffs.name": "模组增益兼容",
+  "config.mod-buffs.tooltip": "当其他模组更新它给予你的增益时(例如骑马时的速度加成),新数值会替换旧数值,而不是叠加在上面.食物,饮品和雕像祝福仍会叠加.",
   "config.statue-stacking.name": "每日祝福次数",
   "config.statue-stacking.tooltip": "每座雕像一次：放置多座矮人王雕像或祝福雕像,每天可从每座雕像获得一次祝福.",
   "config.statue-stacking.vanilla": "一次（原版）",

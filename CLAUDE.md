@@ -12,7 +12,7 @@ Shared house conventions for all my mods are imported below. This file only cove
 dotnet build
 ```
 
-`Pathoschild.Stardew.ModBuildConfig` deploys the DLL + `manifest.json` to the SMAPI `Mods` folder on each build. No test project; verify by launching the game through SMAPI.
+`Pathoschild.Stardew.ModBuildConfig` deploys the DLL + `manifest.json` to the SMAPI `Mods` folder on each build. In-game tests: build `..\StackBuffs.Tests` too (needs the TestRunner mod installed), launch through SMAPI and load the `TEST` save; TestRunner runs the scenarios automatically. Anything the scenarios can't see (the buff bar, real mods) still needs checking in game.
 
 ## Architecture
 
@@ -25,10 +25,16 @@ Config is pushed into the patch classes as static fields (`BuffManagerPatch.Conf
 A prefix on `BuffManager.Apply`, switching on `ModConfig.Mode` (`StackingMode`). Debuffs and non-locally-controlled managers (remote farmers in multiplayer) always fall through to vanilla.
 
 - `Additive`, `RefreshAndStack`, `TimerOnly`: merge into the existing buff with the same id; the modes differ in whether effects add and whether timers add or refresh.
-- `Independent`: stores each buff under a composed key `id + '\u001F' + source` so same-id buffs from different sources get their own icon and timer. Because that breaks id-based lookups, **`IsAppliedPatch` and `RemovePatch` exist to make `hasBuff`, `PLAYER_HAS_BUFF` and `Remove(id)` still match composed keys.** Use `BuffManagerPatch.FindApplied` rather than `AppliedBuffs[id]` anywhere a buff is looked up by plain id. `IsAppliedPatch` runs on every `hasBuff` call, some of them per tick, so keep it allocation-free.
-- `statue_of_blessings_*` buffs always stay under their plain id, whatever the mode.
-- `NormalizeKeys` re-keys applied buffs when the mode changes mid-game.
-- `DisabledEffects` = per-effect opt-out: those fields use vanilla replacement instead of adding. `WholeDay` / `WholeDayEffects` make buffs `ENDLESS`; `RemoveWholeDayBuffs` (called from `ModEntry.OnDayEnding`) removes those at day end unless the buff's data says it is endless anyway.
+- `Independent`: same-id buffs from different sources (vanilla food/drink all use id `food`/`drink`) each keep their own icon and timer. **Every buff stays under its plain id** so vanilla and other mods' lookups (`AppliedBuffs[id]`, `hasBuff`, `Remove(id)`) work unchanged. 1.1.2 used hidden composed keys instead, which crashed Horse Master; don't reintroduce extra keys. When a second source arrives, the slot holds a `StackedBuff` (`Patches/StackedBuff.cs`) with the copies inside:
+  - It's only used for 2+ copies. A single copy is always the plain buff object, and `update` puts the last copy back into the slot (safe because `BuffManager.Update` loops over `AppliedBuffIds`, not the dictionary).
+  - It ticks each copy's own `update` (mod subclasses like Love of Cooking's `CurryBuff` rely on theirs), and its `effects`/timer are the sum/longest of the copies.
+  - Other mods edit the buff they look up (Love of Cooking changes `millisecondsDuration` and effects directly), so `update` passes any outside change on to the newest copy before recalculating.
+  - `BuffsDisplayPatch` expands containers in `BuffsDisplay.GetSortedBuffs` so each copy gets its own icon. If it ever fails to apply, the container shows as combined per-effect icons (it has no own icon).
+  - `OnModeChanged` folds containers into one plain buff when leaving Independent.
+- `statue_of_blessings_*` buffs always stay a single merged buff, whatever the mode.
+- **Mods updating their own buff** (`Patches/BuffCaller.cs`, `LetModsManageOwnBuffs`): vanilla `Apply` replaces, and many mods re-apply to update (Horse Master, Tractor Mod, CJB Cheats, Movement Mod, Daleao's Professions). When the same id *and source* is re-applied and the caller (found by walking the stack past StackBuffs, Harmony, `BuffManager` and `Farmer.applyBuff`) is a C# mod rather than the game, it's replaced instead of stacked. **Don't cache the verdict**: the game and a mod can apply the same id with the same (null) source, e.g. `applyBuff("20")`, so only each call's own stack tells them apart (a cache keyed by id/source mixed them up). **Don't exempt `isEating` here**: the flag is on for the whole eating animation, so a mod renewing its buff mid-eating would stack. Game paths (eating, statues, rings, trigger actions/Content Patcher) always stack.
+- In-game tests live in a separate test mod, `..\StackBuffs.Tests` (TestRunner scenarios; run `test run` on the `TEST` save, results in `%AppData%\StardewValley\results.json`).
+- `DisabledEffects` = per-effect opt-out: those fields use vanilla replacement instead of adding. `WholeDay` / `WholeDayEffects` make buffs `ENDLESS`, but only buffs the game hands out (the same `BuffCaller` check as below; other mods' buffs keep their own timers, whatever `LetModsManageOwnBuffs` is set to). Exception: while `isEating`, a buff whose id isn't active yet also counts as food, since C# food frameworks like BuffFramework apply their buff once mid-animation (they never re-apply an active one); `RemoveWholeDayBuffs` (called from `ModEntry.OnDayEnding`) removes those at day end unless the buff's data says it is endless anyway.
 - Since the prefix returns `false`, it must replicate vanilla side effects itself (`actionsOnApply` via `FireActionsOnApply`, `Dirty`, `OnAdded`, `buffsDisplay.updatedIDs`).
 
 ### `Patches/StatuePatch.cs`: statue stacking (`EnableStatueStacking`)

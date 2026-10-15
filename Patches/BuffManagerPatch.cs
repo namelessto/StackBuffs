@@ -23,75 +23,31 @@ internal static class BuffManagerPatch
             return true;
         bool isWholeDay = Config?.WholeDay == true
                        || (Config?.WholeDayEffects is { Count: > 0 } wde && HasMatchingEffect(buff, wde));
-        if (isWholeDay && buff.millisecondsDuration != Buff.ENDLESS)
+        // The whole-day options are for buffs the game hands out (food, drinks, statues). A buff another
+        // mod manages itself keeps its own timer: CJB Cheats, for one, renews its buff once its timer reads
+        // 10s or less, and an endless buff's timer reads -2, so it would re-apply every tick.
+        if (isWholeDay && buff.millisecondsDuration != Buff.ENDLESS && CountsAsFoodForWholeDay(__instance, buff))
         {
             buff.millisecondsDuration = Buff.ENDLESS;
             buff.totalMillisecondsDuration = Buff.ENDLESS;
         }
 
-        switch (Config?.Mode ?? StackingMode.Additive)
+        var mode = Config?.Mode ?? StackingMode.Additive;
+        // A slot only holds a StackedBuff in Independent mode; if one is left over (mode changed without
+        // the menu's callback), fold it into a plain buff so the other modes see what they expect.
+        if (mode != StackingMode.Independent
+            && __instance.AppliedBuffs.TryGetValue(buff.id, out var leftover) && leftover is StackedBuff leftoverStack)
+            CollapseContainer(__instance, buff.id, leftoverStack);
+
+        switch (mode)
         {
             case StackingMode.Independent:
-            {
-                // Blessings of the same type always combine into one instance regardless of source
-                // (multiple statues stacking together), same as before - they already have unique
-                // per-blessing-type ids, so no key changes are needed here.
-                if (buff.id.StartsWith("statue_of_blessings_"))
-                {
-                    if (__instance.AppliedBuffs.TryGetValue(buff.id, out var existingBlessing))
-                    {
-                        MergeEffects(existingBlessing.effects, buff.effects, Config?.DisabledEffects);
-                        if (existingBlessing.millisecondsDuration != Buff.ENDLESS &&
-                            buff.millisecondsDuration != Buff.ENDLESS &&
-                            buff.millisecondsDuration > existingBlessing.millisecondsDuration)
-                        {
-                            existingBlessing.millisecondsDuration = buff.millisecondsDuration;
-                            existingBlessing.totalMillisecondsDuration = buff.millisecondsDuration;
-                        }
-                        FireActionsOnApply(buff);
-                        __instance.Dirty = true;
-                        return false;
-                    }
-                    return true;
-                }
-
-                // Everything else: key by (id, source) instead of just id, so buffs sharing a
-                // generic id (e.g. "food"/"drink") from different sources each get their own
-                // entry - their own icon and their own independently-ticking timer - instead of
-                // being merged into a single shared instance. The combined stat effect still adds
-                // up normally, since BuffManager.GetValues() sums every applied buff's effects
-                // regardless of what key it's stored under.
-                string key = ComposeIndependentKey(buff.id, buff.source);
-                if (__instance.AppliedBuffs.TryGetValue(key, out var existingSameSource))
-                {
-                    // Re-applying the same source while its buff is still active: just refresh the timer.
-                    if (existingSameSource.millisecondsDuration != Buff.ENDLESS)
-                    {
-                        existingSameSource.millisecondsDuration = buff.millisecondsDuration;
-                        existingSameSource.totalMillisecondsDuration = buff.millisecondsDuration;
-                    }
-                    FireActionsOnApply(buff);
-                    __instance.Dirty = true;
-                    return false;
-                }
-
-                // A disabled effect uses vanilla replacement: if the incoming buff has that effect, it
-                // wins for it, so strip it from every other entry sharing the id before adding ours.
-                if (Config?.DisabledEffects is { Count: > 0 } disabled)
-                    ReplaceDisabledEffects(__instance, buff, disabled);
-
-                __instance.AppliedBuffs[key] = buff;
-                __instance.AppliedBuffIds.Add(key);
-                Game1.buffsDisplay.updatedIDs.Add(buff.id);
-                FireActionsOnApply(buff);
-                __instance.Dirty = true;
-                buff.OnAdded();
-                return false;
-            }
+                return ApplyIndependent(__instance, buff);
 
             case StackingMode.Additive:
                 if (__instance.AppliedBuffs.TryGetValue(buff.id, out var existingAdd))
                 {
+                    if (ShouldModReplace(existingAdd, buff)) return true;
                     MergeEffects(existingAdd.effects, buff.effects, Config?.DisabledEffects);
                     if (existingAdd.millisecondsDuration != Buff.ENDLESS)
                     {
@@ -116,6 +72,7 @@ internal static class BuffManagerPatch
             case StackingMode.RefreshAndStack:
                 if (__instance.AppliedBuffs.TryGetValue(buff.id, out var existingRAS))
                 {
+                    if (ShouldModReplace(existingRAS, buff)) return true;
                     MergeEffects(existingRAS.effects, buff.effects, Config?.DisabledEffects);
                     if (buff.millisecondsDuration == Buff.ENDLESS)
                     {
@@ -136,6 +93,7 @@ internal static class BuffManagerPatch
             case StackingMode.TimerOnly:
                 if (__instance.AppliedBuffs.TryGetValue(buff.id, out var existingTO))
                 {
+                    if (ShouldModReplace(existingTO, buff)) return true;
                     if (Config?.DisabledEffects is { Count: > 0 } disabledTO)
                         OverwriteDisabledEffects(existingTO.effects, buff.effects, disabledTO);
                     if (existingTO.millisecondsDuration != Buff.ENDLESS)
@@ -163,52 +121,140 @@ internal static class BuffManagerPatch
         }
     }
 
-    /// <summary>Build a per-source dictionary key for Independent mode, so buffs that share a generic id (like "food") but come from different sources don't collide in <see cref="BuffManager.AppliedBuffs"/>.</summary>
-    private static string ComposeIndependentKey(string id, string? source) => id + IndependentKeySeparator + (source ?? "");
-
-    /// <summary>Separates id and source in an Independent-mode key. A control character, so it can't appear in a real buff id.</summary>
-    private const char IndependentKeySeparator = '\u001F';
-
-    /// <summary>Whether <paramref name="key"/> is an Independent-mode composed key for <paramref name="id"/>. Allocation-free, since it runs on every <see cref="Farmer.hasBuff"/> call.</summary>
-    private static bool IsComposedKeyFor(string key, string id) =>
-        key.Length > id.Length
-        && key[id.Length] == IndependentKeySeparator
-        && key.StartsWith(id, StringComparison.Ordinal);
-
     /// <summary>
-    /// Independent mode stores buffs under a composed id+source key instead of the plain id
-    /// (see <see cref="ComposeIndependentKey"/>), so vanilla <see cref="BuffManager.IsApplied"/> — and
-    /// everything built on it, like <see cref="Farmer.hasBuff"/> and the PLAYER_HAS_BUFF game state query —
-    /// would otherwise never find them via a literal id match. This patch makes those lookups also match
-    /// a composed key by its id prefix, so id-based checks keep working regardless of stacking mode.
+    /// Independent mode: each source gets its own copy, timer and icon. Copies sharing an id (e.g. Coffee and
+    /// Triple Shot Espresso, both "drink") live in one <see cref="StackedBuff"/> slot under the plain id, so
+    /// lookups by id keep working for the game and other mods.
     /// </summary>
-    [HarmonyPatch(typeof(BuffManager), nameof(BuffManager.IsApplied))]
-    internal static class IsAppliedPatch
+    private static bool ApplyIndependent(BuffManager manager, Buff buff)
     {
-        [HarmonyPrefix]
-        static bool Prefix(BuffManager __instance, string id, ref bool __result)
+        // Blessings of the same type always combine into one instance regardless of source
+        // (multiple statues stacking together) - they already have unique per-blessing-type ids.
+        if (buff.id.StartsWith("statue_of_blessings_"))
         {
-            if (__instance.AppliedBuffIds.Contains(id))
+            if (manager.AppliedBuffs.TryGetValue(buff.id, out var existingBlessing))
             {
-                __result = true;
+                MergeEffects(existingBlessing.effects, buff.effects, Config?.DisabledEffects);
+                if (existingBlessing.millisecondsDuration != Buff.ENDLESS &&
+                    buff.millisecondsDuration != Buff.ENDLESS &&
+                    buff.millisecondsDuration > existingBlessing.millisecondsDuration)
+                {
+                    existingBlessing.millisecondsDuration = buff.millisecondsDuration;
+                    existingBlessing.totalMillisecondsDuration = buff.millisecondsDuration;
+                }
+                FireActionsOnApply(buff);
+                manager.Dirty = true;
                 return false;
             }
-            var appliedIds = __instance.AppliedBuffIds;
-            for (int i = 0; i < appliedIds.Count; i++)
+            return true;
+        }
+
+        if (!manager.AppliedBuffs.TryGetValue(buff.id, out var existing))
+            return true;
+
+        if (existing is StackedBuff stacked)
+        {
+            int sameSourceIndex = stacked.IndexOfSource(buff.source);
+            if (sameSourceIndex >= 0)
             {
-                if (IsComposedKeyFor(appliedIds[i], id))
+                Buff sameSource = stacked.Copies[sameSourceIndex];
+                if (ShouldModReplace(sameSource, buff))
                 {
-                    __result = true;
-                    return false;
+                    stacked.ReplaceCopy(sameSourceIndex, buff);
+                    Game1.buffsDisplay.updatedIDs.Add(buff.id);
                 }
+                else
+                {
+                    RefreshTimer(sameSource, buff);
+                    stacked.Recompute();
+                }
+                FireActionsOnApply(buff);
+                manager.Dirty = true;
+                return false;
             }
-            __result = false;
+
+            // A disabled effect uses vanilla replacement: if the incoming buff has that effect, it wins
+            // for it, so strip it from the other copies before adding ours.
+            if (Config?.DisabledEffects is { Count: > 0 } disabled)
+            {
+                stacked.RemoveCopies(copy => ClearDisabledEffects(copy, buff, disabled));
+                // Emptied copies were removed, which may have turned the slot back into one plain buff or
+                // removed it. Start over against whatever is there now; the effects are already cleared, so
+                // the second pass doesn't clear anything again.
+                if (!manager.AppliedBuffs.TryGetValue(buff.id, out var afterClear) || afterClear != stacked)
+                    return ApplyIndependent(manager, buff);
+            }
+
+            stacked.AddCopy(buff);
+            AddedNewCopy(manager, buff);
             return false;
         }
+
+        if (existing.source == buff.source)
+        {
+            // Re-applying the same source while its buff is still active.
+            if (ShouldModReplace(existing, buff)) return true;
+            RefreshTimer(existing, buff);
+            FireActionsOnApply(buff);
+            manager.Dirty = true;
+            return false;
+        }
+
+        if (Config?.DisabledEffects is { Count: > 0 } disabledPlain && ClearDisabledEffects(existing, buff, disabledPlain))
+        {
+            // The existing buff had nothing left: vanilla replacement.
+            return true;
+        }
+
+        manager.AppliedBuffs[buff.id] = new StackedBuff(manager, existing, buff);
+        AddedNewCopy(manager, buff);
+        return false;
+    }
+
+    /// <summary>Vanilla Apply's side effects for a newly added copy (its own OnAdded, the buff bar pulse, trigger actions).</summary>
+    private static void AddedNewCopy(BuffManager manager, Buff buff)
+    {
+        Game1.buffsDisplay.updatedIDs.Add(buff.id);
+        FireActionsOnApply(buff);
+        manager.Dirty = true;
+        buff.OnAdded();
+    }
+
+    /// <summary>Refresh an applied buff's timer from a re-application by the same source.</summary>
+    private static void RefreshTimer(Buff existing, Buff incoming)
+    {
+        if (existing.millisecondsDuration == Buff.ENDLESS) return;
+        existing.millisecondsDuration = incoming.millisecondsDuration;
+        existing.totalMillisecondsDuration = incoming.millisecondsDuration;
+    }
+
+    /// <summary>
+    /// Whether a re-application should use vanilla replacement instead of stacking: the same source is
+    /// re-applying a buff that's still active, and that source is another C# mod updating its own buff
+    /// (see <see cref="BuffCaller"/>), not the game handing out food, drinks or statue buffs.
+    /// </summary>
+    private static bool ShouldModReplace(Buff existing, Buff incoming)
+    {
+        if (Config?.LetModsManageOwnBuffs == false) return false;
+        if (existing.source != incoming.source) return false;
+        return BuffCaller.IsFromMod(incoming);
+    }
+
+    /// <summary>
+    /// Whether the whole-day options should make <paramref name="buff"/> endless: the game hands it out (food,
+    /// drinks, statues, rings, Content Patcher data), or it's a C# food framework's buff for the item being
+    /// eaten. Those frameworks (e.g. BuffFramework) apply their buff once while the eating animation plays
+    /// and only reset its timer afterwards, so "being eaten" is limited to a buff that isn't active yet:
+    /// a mod renewing its own active buff mid-eating (CJB Cheats, Horse Master) keeps its timer.
+    /// </summary>
+    private static bool CountsAsFoodForWholeDay(BuffManager manager, Buff buff)
+    {
+        if (Game1.player.isEating && !manager.AppliedBuffs.ContainsKey(buff.id)) return true;
+        return !BuffCaller.IsFromMod(buff);
     }
 
     /// <summary>Add <paramref name="incoming"/> into <paramref name="target"/>, field by field. A field named in <paramref name="disabledEffects"/> is overwritten (vanilla replacement) instead of added, so disabling one effect no longer discards unrelated effects already stacked onto the same buff.</summary>
-    private static void MergeEffects(BuffEffects target, BuffEffects incoming, HashSet<string>? disabledEffects)
+    internal static void MergeEffects(BuffEffects target, BuffEffects incoming, HashSet<string>? disabledEffects)
     {
         if (incoming is not { } e) return;
         MergeField(target.FarmingLevel,   e.FarmingLevel,   disabledEffects, "FarmingLevel");
@@ -237,47 +283,13 @@ internal static class BuffManagerPatch
         if (disabledEffects != null && disabledEffects.Contains(name))
         {
             // Replace only when the incoming buff actually grants this effect, so a buff without it
-            // doesn't wipe it (same rule as ReplaceDisabledEffects in Independent mode).
+            // doesn't wipe it (same rule as ClearDisabledEffects in Independent mode).
             if (incoming.Value != 0)
                 target.Value = incoming.Value;
         }
         else
             target.Value += incoming.Value;
     }
-
-    /// <summary>Find an applied buff by its plain id, whether it's stored under that id or under an Independent-mode composed key.</summary>
-    internal static Buff? FindApplied(BuffManager manager, string id)
-    {
-        if (manager.AppliedBuffs.TryGetValue(id, out var buff)) return buff;
-        foreach (var (key, value) in manager.AppliedBuffs)
-        {
-            if (KeyMatchesId(key, id)) return value;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Vanilla <see cref="BuffManager.Remove"/> only matches the exact key, so removing by plain id (e.g.
-    /// MineShaft.OnLeftMines removing "CalicoStatueSpeed", or the RemoveBuff trigger action) would miss
-    /// buffs Independent mode stored under a composed id+source key. This also removes those entries.
-    /// </summary>
-    [HarmonyPatch(typeof(BuffManager), nameof(BuffManager.Remove))]
-    internal static class RemovePatch
-    {
-        [HarmonyPostfix]
-        static void Postfix(BuffManager __instance, string id)
-        {
-            if (!__instance.IsLocallyControlled()) return;
-            // No key is a composed key for another composed key, so the nested Remove(key) calls below
-            // find nothing more to remove and don't recurse further.
-            foreach (string key in __instance.AppliedBuffs.Keys.Where(k => IsComposedKeyFor(k, id)).ToList())
-                __instance.Remove(key);
-        }
-    }
-
-    /// <summary>Whether <paramref name="key"/> is the plain id or an Independent-mode composed key for <paramref name="id"/>.</summary>
-    private static bool KeyMatchesId(string key, string id) =>
-        key == id || IsComposedKeyFor(key, id);
 
     /// <summary>Pair each disabled effect's field on <paramref name="e"/> with the same field on <paramref name="incoming"/>.</summary>
     private static IEnumerable<(NetFloat Existing, NetFloat Incoming)> DisabledFields(BuffEffects e, BuffEffects incoming, HashSet<string> names)
@@ -309,78 +321,65 @@ internal static class BuffManagerPatch
 
     /// <summary>
     /// Independent-mode equivalent of <see cref="MergeField"/>'s overwrite for disabled effects: for each
-    /// disabled effect the incoming buff actually grants, zero it on every other applied buff sharing its id,
-    /// so only the incoming buff's value for it counts. Disabled effects the incoming buff doesn't grant are
-    /// left alone, so an unrelated buff doesn't wipe them. A buff left with no effects at all by this is
-    /// removed, as vanilla would have replaced it outright.
+    /// disabled effect the incoming buff actually grants, zero it on <paramref name="target"/>, so only the
+    /// incoming buff's value for it counts. Disabled effects the incoming buff doesn't grant are left alone,
+    /// so an unrelated buff doesn't wipe them.
     /// </summary>
-    private static void ReplaceDisabledEffects(BuffManager manager, Buff incoming, HashSet<string> disabled)
+    /// <returns>Whether <paramref name="target"/> was left with no effects at all, so it should be removed (vanilla would have replaced it outright).</returns>
+    private static bool ClearDisabledEffects(Buff target, Buff incoming, HashSet<string> disabled)
     {
-        if (incoming.effects is null) return;
-        foreach (string key in manager.AppliedBuffs.Keys.Where(k => KeyMatchesId(k, incoming.id)).ToList())
+        if (incoming.effects is null || target.effects is null) return false;
+        bool cleared = false;
+        foreach (var (existing, incomingField) in DisabledFields(target.effects, incoming.effects, disabled))
         {
-            var effects = manager.AppliedBuffs[key].effects;
-            if (effects is null) continue;
-            bool cleared = false;
-            foreach (var (existing, incomingField) in DisabledFields(effects, incoming.effects, disabled))
-            {
-                if (incomingField.Value == 0 || existing.Value == 0) continue;
-                existing.Value = 0;
-                cleared = true;
-            }
-            if (!cleared) continue;
-            if (effects.HasAnyValue())
-                manager.Dirty = true;
-            else
-                manager.Remove(key);
+            if (incomingField.Value == 0 || existing.Value == 0) continue;
+            existing.Value = 0;
+            cleared = true;
         }
+        return cleared && !target.effects.HasAnyValue();
     }
 
     /// <summary>
-    /// Re-key the local player's applied buffs to match the current stacking mode, so a mode change made
-    /// mid-game doesn't leave entries under the other mode's key scheme (plain id vs. Independent's
-    /// id+source key), where the new mode's lookups would miss them and stack a duplicate alongside.
+    /// Called when the stacking mode changes mid-game. Only Independent mode uses <see cref="StackedBuff"/>
+    /// slots, so when leaving it, fold each one into a single plain buff that the other modes can stack onto.
     /// </summary>
-    internal static void NormalizeKeys(BuffManager manager)
+    internal static void OnModeChanged(BuffManager manager)
     {
         if (!manager.IsLocallyControlled()) return;
-        var dataBuffs = DataLoader.Buffs(Game1.content);
-        bool independent = (Config?.Mode ?? StackingMode.Additive) == StackingMode.Independent;
-        bool changed = false;
+        if ((Config?.Mode ?? StackingMode.Additive) == StackingMode.Independent) return;
 
-        foreach (var (key, buff) in manager.AppliedBuffs.ToList())
+        foreach (var (id, buff) in manager.AppliedBuffs.ToList())
         {
-            // Same exclusions as Prefix: debuffs and blessings always stay under their plain id.
-            if (buff.id.StartsWith("statue_of_blessings_")) continue;
-            if (dataBuffs.TryGetValue(buff.id, out var data) && data.IsDebuff) continue;
+            if (buff is StackedBuff stacked)
+                CollapseContainer(manager, id, stacked);
+        }
+    }
 
-            string wantKey = independent ? ComposeIndependentKey(buff.id, buff.source) : buff.id;
-            if (key == wantKey) continue;
-
-            manager.AppliedBuffs.Remove(key);
-            if (manager.AppliedBuffs.TryGetValue(wantKey, out var target))
-            {
-                // Two entries collapse into one key: combine them, keeping the longer timer.
-                MergeEffects(target.effects, buff.effects, Config?.DisabledEffects);
-                if (target.millisecondsDuration != Buff.ENDLESS &&
-                    (buff.millisecondsDuration == Buff.ENDLESS || buff.millisecondsDuration > target.millisecondsDuration))
-                {
-                    target.millisecondsDuration = buff.millisecondsDuration;
-                    target.totalMillisecondsDuration = buff.millisecondsDuration;
-                }
-                buff.OnRemoved();
-            }
-            else
-            {
-                manager.AppliedBuffs[wantKey] = buff;
-            }
-            changed = true;
+    /// <summary>Replace a <see cref="StackedBuff"/> slot with its oldest copy, with the other copies' effects merged in and the longest timer.</summary>
+    private static void CollapseContainer(BuffManager manager, string id, StackedBuff stacked)
+    {
+        List<Buff> copies = stacked.Copies;
+        if (copies.Count == 0)
+        {
+            manager.Remove(id);
+            return;
         }
 
-        if (!changed) return;
-        manager.AppliedBuffIds.Clear();
-        foreach (string key in manager.AppliedBuffs.Keys)
-            manager.AppliedBuffIds.Add(key);
+        Buff merged = copies[0];
+        for (int i = 1; i < copies.Count; i++)
+        {
+            Buff other = copies[i];
+            MergeEffects(merged.effects, other.effects, Config?.DisabledEffects);
+            if (merged.millisecondsDuration != Buff.ENDLESS &&
+                (other.millisecondsDuration == Buff.ENDLESS || other.millisecondsDuration > merged.millisecondsDuration))
+            {
+                merged.millisecondsDuration = other.millisecondsDuration;
+                merged.totalMillisecondsDuration = other.millisecondsDuration;
+            }
+            other.OnRemoved();
+        }
+        copies.Clear();
+        manager.AppliedBuffs[id] = merged;
         manager.Dirty = true;
     }
 
@@ -388,13 +387,17 @@ internal static class BuffManagerPatch
     internal static void RemoveWholeDayBuffs(BuffManager manager)
     {
         var dataBuffs = DataLoader.Buffs(Game1.content);
-        var toRemove = manager.AppliedBuffs
-            .Where(kv => kv.Value.millisecondsDuration == Buff.ENDLESS
-                      && (!dataBuffs.TryGetValue(kv.Value.id, out var d) || d.Duration != Buff.ENDLESS))
-            .Select(kv => kv.Key)
-            .ToList();
-        foreach (var key in toRemove)
-            manager.Remove(key);
+        bool IsWholeDay(Buff buff) =>
+            buff.millisecondsDuration == Buff.ENDLESS
+            && (!dataBuffs.TryGetValue(buff.id, out var d) || d.Duration != Buff.ENDLESS);
+
+        foreach (var (id, buff) in manager.AppliedBuffs.ToList())
+        {
+            if (buff is StackedBuff stacked)
+                stacked.RemoveCopies(IsWholeDay);
+            else if (IsWholeDay(buff))
+                manager.Remove(id);
+        }
     }
 
     private static bool HasMatchingEffect(Buff buff, HashSet<string> effectNames)

@@ -9,6 +9,8 @@ public class ModConfig
     public HashSet<string> DisabledEffects { get; set; } = new();
     public HashSet<string> WholeDayEffects { get; set; } = new();
     public bool EnableStatueStacking { get; set; } = true;
+    /// <summary>When another C# mod re-applies its own still-active buff, replace it (vanilla) instead of stacking.</summary>
+    public bool LetModsManageOwnBuffs { get; set; } = true;
 
     public bool DwarfAutoPick { get; set; } = false;
     public bool DwarfRandomizeOffering { get; set; } = false;

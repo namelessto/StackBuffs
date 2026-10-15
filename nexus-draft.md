@@ -99,6 +99,14 @@ Safe to add to an existing save. It only changes how buffs are applied and how s
 
 [size=4][b]Changelog[/b][/size]
 
+[b]1.2.0[/b]
+[list]
+[*]Fixed a crash with Horse Master in Independent mode, and other mods not finding their own buff in that mode
+[*]Added [b]Mod Buff Compatibility[/b] (on by default). When another mod updates a buff it gave you, like Horse Master's riding speed or CJB Cheats' move speed, the new value replaces the old one instead of stacking on top of it. Food, drinks and statue blessings still stack
+[*]Buffs Last All Day: now only affects buffs from food, drinks and statues, not buffs other mods manage themselves
+[*]Lots of under the hood changes that should not affect anything
+[/list]
+
 [b]1.1.2[/b]
 [list]
 [*]Fixed unchecking an effect in Per-Effect: Stacking wiping your other stacked effects. Now only the unchecked effect is replaced

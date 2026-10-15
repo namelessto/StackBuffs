@@ -117,8 +117,7 @@ internal static class StatuePatch
     // Called after applyBuff so hasBuff returns true and DwarfBuffCount is valid.
     private static void UpdateStatueBuffDescription(Farmer who, string buffId)
     {
-        // Looked up via FindApplied since Independent mode may store it under a composed id+source key.
-        if (BuffManagerPatch.FindApplied(who.buffs, buffId) is not { } buff) return;
+        if (!who.buffs.AppliedBuffs.TryGetValue(buffId, out Buff? buff)) return;
         int count = DwarfBuffCount(who, buffId);
 
         string desc = buff.description ?? "";

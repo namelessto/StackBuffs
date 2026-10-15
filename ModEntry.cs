@@ -54,17 +54,17 @@ internal sealed class ModEntry : Mod
         StatuePatch.Config = Config;
     }
 
-    /// <summary>Re-key already-applied buffs when the stacking mode is changed mid-game.</summary>
+    /// <summary>Fold Independent mode's multi-copy slots into plain buffs when the stacking mode is changed mid-game.</summary>
     private void OnModeChanged()
     {
         try
         {
             if (Context.IsWorldReady)
-                BuffManagerPatch.NormalizeKeys(Game1.player.buffs);
+                BuffManagerPatch.OnModeChanged(Game1.player.buffs);
         }
         catch (Exception ex)
         {
-            Monitor.Log($"Failed to re-key buffs after the stacking mode changed: {ex}", LogLevel.Error);
+            Monitor.Log($"Failed to update applied buffs after the stacking mode changed: {ex}", LogLevel.Error);
         }
     }
 }

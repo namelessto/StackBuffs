@@ -8,6 +8,8 @@
   "config.mode.TimerOnly": "Timer Only",
   "config.whole-day.name": "Buffs Last All Day",
   "config.whole-day.tooltip": "When enabled, all food and drink buffs last until you sleep, regardless of their normal duration.",
+  "config.mod-buffs.name": "Mod Buff Compatibility",
+  "config.mod-buffs.tooltip": "When another mod updates a buff it gave you (for example a speed bonus while riding), the new value replaces the old one instead of stacking on top of it. Food, drinks and statue blessings still stack.",
   "config.statue-stacking.name": "Blessings Per Day",
   "config.statue-stacking.tooltip": "One per statue: place multiple Dwarf King or Blessings statues to receive one blessing from each, per day.",
   "config.statue-stacking.vanilla": "One (vanilla)",

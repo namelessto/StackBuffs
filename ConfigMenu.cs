@@ -43,6 +43,14 @@ internal static class ConfigMenu
             tooltip: () => T.Get("config.whole-day.tooltip")
         );
 
+        gmcm.AddBoolOption(
+            manifest,
+            getValue: () => getConfig().LetModsManageOwnBuffs,
+            setValue: v => getConfig().LetModsManageOwnBuffs = v,
+            name: () => T.Get("config.mod-buffs.name"),
+            tooltip: () => T.Get("config.mod-buffs.tooltip")
+        );
+
         gmcm.AddTextOption(
             manifest,
             getValue: () => getConfig().EnableStatueStacking ? "PerStatue" : "Vanilla",
