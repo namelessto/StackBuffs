@@ -31,8 +31,9 @@ All options are in [b]config.json[/b] or through [url=https://www.nexusmods.com/
 
 [b]Buff Stacking[/b]
 [list]
-[*][b]Stacking Mode[/b]: Additive stacks effects and adds timers. Independent gives each application its own timer, stacking effects only from different sources. Refresh And Stack stacks effects and resets the timer. Timer Only extends the timer without stacking effects. (default: Additive)
+[*][b]Stacking Mode[/b]: Additive stacks effects and adds timers. Independent gives each food or drink its own buff icon and timer, so effects from different sources stack. Eating the same item again refreshes its timer. Refresh And Stack stacks effects and resets the timer. Timer Only extends the timer without stacking effects. (default: Additive)
 [*][b]Buffs Last All Day[/b]: food and drink buffs last until you sleep, whatever their normal duration. Works with any stacking mode. (default: off)
+[*][b]Mod Buff Compatibility[/b]: when another mod updates a buff it gave you (for example a speed bonus while riding), the new value replaces the old one instead of stacking on top of it. Food, drinks and statue blessings still stack. (default: on)
 [*][b]Blessings Per Day[/b]: One per statue gives each placed Dwarf King or Blessing Statue its own blessing per day. One (vanilla) limits you to one per statue type. (default: One per statue)
 [/list]
 
@@ -52,7 +53,7 @@ All options are in [b]config.json[/b] or through [url=https://www.nexusmods.com/
 
 [b]Per-Effect: Stacking[/b]
 [list]
-[*]A checklist of twelve effect types. Uncheck any to use vanilla replacement behavior for buffs that grant it, whatever the global stacking mode. (default: all checked)
+[*]A checklist of twelve effect types. Uncheck any to make that effect use vanilla replacement instead of stacking, whatever the global stacking mode. Other effects on the same buff keep stacking. (default: all checked)
 [/list]
 
 [b]Per-Effect: Whole Day[/b]
@@ -77,7 +78,7 @@ All options are in [b]config.json[/b] or through [url=https://www.nexusmods.com/
 
 [size=4][b]Compatibility[/b][/size]
 
-Safe to add to an existing save. It only changes how buffs are applied and how statue cooldowns work. If you're updating from 1.0.x, delete your [font=Courier New]config.json[/font] before launching. The config format changed and the old file will cause a load error.
+Safe to add to an existing save. It only changes how buffs are applied and how statue cooldowns work. Works with mods that manage their own buffs, such as Horse Master, Tractor Mod and CJB Cheats Menu.
 
 [size=4][b]Credits[/b][/size]
 
